@@ -14,6 +14,10 @@
     .PARAMETER Exchange
         RabbitMq Exchange
 
+    .PARAMETER ExchangeType
+        Specify the Exchange Type to be Explicitly declared as non-durable, non-autodelete, without any option.
+        Should you want more specific Exchange, create it prior connecting to the channel, and do not specify this parameter.
+
     .PARAMETER Key
         Routing Keys to look for
 
@@ -47,14 +51,29 @@
     .PARAMETER Credential
         Optional PSCredential to connect to RabbitMq with
 
+    .PARAMETER CertPath
+        Pkcs12/PFX formatted certificate to connect to RabbitMq with.  Prior to connecting, please make sure the system trusts the CA issuer or self-signed SCMB certifiate.
+
+    .PARAMETER CertPassphrase
+        The SecureString Pkcs12/PFX Passphrase of the certificate.
+
     .PARAMETER Ssl
         Optional Ssl version to connect to RabbitMq with
 
         If specified, we use ComputerName as the SslOption ServerName property.
 
+    .PARAMETER vhost
+        Create a connection via the specified virtual host, default is /
+
+    .PARAMETER ActionData
+        Allows you to specify an Object to be available in the Action scriptblock triggered upon reception of message.
+        
     .PARAMETER IncludeEnvelope
-        Include the Message envelope (Metadata) of the message. If ommited, only 
+        Include the Message envelope (Metadata) of the message. If ommited, only
         the payload (body of the message) is returned
+
+    .PARAMETER Port
+        Port number used by the RabbitMq (AMQP) Server
 
     .EXAMPLE
         Register-RabbitMqEvent -ComputerName RabbitMq.Contoso.com -Exchange TestFanExc -Key 'wat' -Credential $Credential -Ssl Tls12 -QueueName TestQueue -Action {"HI! $_"}
@@ -72,6 +91,10 @@
         [parameter(Mandatory = $True)]
         [AllowEmptyString()]
         [string]$Exchange,
+        
+        [parameter(Mandatory = $false)]
+        [ValidateSet('Direct','Fanout','Topic','Headers')]
+        [string]$ExchangeType = $null,
 
         [parameter(ParameterSetName = 'NoQueueName', Mandatory = $true)]
         [parameter(ParameterSetName = 'NoQueueNameWithBasicQoS', Mandatory = $true)]
@@ -95,6 +118,10 @@
         [parameter(parameterSetName = 'QueueNameWithBasicQoS')]
         [bool]$AutoDelete = $False,
 
+        [parameter(ParameterSetName = 'QueueName')]
+        [parameter(parameterSetName = 'QueueNameWithBasicQoS')]
+        [System.Collections.Generic.Dictionary[String, Object]]$Arguments = $null,
+
         [switch]$RequireAck,
 
         [int]$LoopInterval = 1,
@@ -105,7 +132,13 @@
         [System.Management.Automation.Credential()]
         $Credential,
 
+        [string]$CertPath,
+
+        [securestring]$CertPassphrase,
+
         [System.Security.Authentication.SslProtocols]$Ssl,
+
+        [string]$vhost = '/',
 
         [parameter(parameterSetName = 'QueueNameWithBasicQoS', Mandatory = $true)]
         [parameter(ParameterSetName = 'NoQueueNameWithBasicQoS', Mandatory = $true)]
@@ -119,30 +152,48 @@
         [parameter(ParameterSetName = 'NoQueueNameWithBasicQoS', Mandatory = $true)]
         [switch]$global,
 
-        [switch]$IncludeEnvelope
+        [switch]$IncludeEnvelope,
+
+        [string]$ListenerJobName, 
+
+        $ActionData,
+        
+        [int16]$Port = 5672
     )
+
+    if ( !$PSBoundParameters.ContainsKey('ListenerJobName') ) {
+        $ListenerJobName = "RabbitMq_${ComputerName}_${Exchange}_${Key}"
+    }
+
+    $ArgList = $ComputerName, $Exchange, $ExchangeType, $Key, $Action, $Credential, $CertPath, $CertPassphrase, $Ssl, $LoopInterval, $QueueName, $Durable, $Exclusive, $AutoDelete, $Arguments, $RequireAck, $prefetchSize,$prefetchCount,$global,[bool]$IncludeEnvelope,$ActionData,$vhost,$Port
     
-    $ArgList = $ComputerName, $Exchange, $Key, $Action, $Credential, $Ssl, $LoopInterval, $QueueName, $Durable, $Exclusive, $AutoDelete, $RequireAck,$prefetchSize,$prefetchCount,$global,[bool]$IncludeEnvelope
-    Start-Job -Name "RabbitMq_${ComputerName}_${Exchange}_${Key}" -ArgumentList $Arglist -ScriptBlock {
+    Start-Job -Name $ListenerJobName -ArgumentList $Arglist -ScriptBlock {
         param(
             $ComputerName,
             $Exchange,
+            $ExchangeType,
             $Key,
             $Action,
             [PSCredential]
             [System.Management.Automation.Credential()]
             $Credential,
+            [string]$CertPath,
+            [securestring]$CertPassphrase,
             $Ssl,
             $LoopInterval,
             $QueueName,
             $Durable,
             $Exclusive,
             $AutoDelete,
+            $Arguments,
             $RequireAck,
             $prefetchSize,
             $prefetchCount,
             $global,
-            $IncludeEnvelope
+            $IncludeEnvelope,
+            $ActionData,
+            $vhost,
+            $Port
         )
 
         $ActionSB = [System.Management.Automation.ScriptBlock]::Create($Action)
@@ -151,10 +202,19 @@
             Import-Module PSRabbitMq
 
             #Build the connection and channel params
-            $ConnParams = @{ ComputerName = $ComputerName }
+            $ConnParams = @{ 
+                ComputerName = $ComputerName 
+                Port = $Port
+            }
+            $ConnParams.Add('vhost',$vhost)
+
             $ChanParams = @{ Exchange = $Exchange }
             If($Ssl)       { $ConnParams.Add('Ssl',$Ssl) }
-            If($Credential){ $ConnParams.Add('Credential',$Credential) }
+            if ($CertPath) {
+                $ConnParams.Add('CertPath',$CertPath)
+                $ConnParams.Add('CertPassphrase',$CertPassphrase)
+            }
+            If($Credential -and ! $CertPath){ $ConnParams.Add('Credential',$Credential) }
             If($Key)       { $ChanParams.Add('Key',$Key)}
             If($QueueName)
             {
@@ -162,13 +222,17 @@
                 $ChanParams.Add('Durable' ,$Durable)
                 $ChanParams.Add('Exclusive',$Exclusive)
                 $ChanParams.Add('AutoDelete' ,$AutoDelete)
+                $ChanParams.Add('Arguments' ,$Arguments)
             }
             if($prefetchSize) {
                 $ChanParams.Add('prefetchSize',$prefetchSize)
                 $ChanParams.Add('prefetchCount',$prefetchCount)
                 $ChanParams.Add('global',$global)
             }
-            
+
+            if( $ExchangeType ) {
+                $ChanParams.Add('ExchangeType',$ExchangeType)
+            }
 
             #Create the connection and channel
             $Connection = New-RabbitMqConnectionFactory @ConnParams

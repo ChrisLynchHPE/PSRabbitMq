@@ -12,6 +12,10 @@
     .PARAMETER Exchange
         Optional PSCredential to connect to RabbitMq with
 
+    .PARAMETER ExchangeType
+        Specify the Exchange Type to be Explicitly declared as non-durable, non-autodelete, without any option.
+        Should you want more specific Exchange, create it prior connecting to the channel, and do not specify this parameter.
+
     .PARAMETER Key
         Routing Keys to look for
 
@@ -44,6 +48,10 @@
         [AllowEmptyString()]
         [string]$Exchange,
 
+        [parameter(Mandatory = $false, ValueFromPipelineByPropertyName = $true)]
+        [ValidateSet('Direct','Fanout','Topic','Headers')]
+        [string]$ExchangeType = $null,
+
         [parameter(ParameterSetName = 'NoQueueNameWithBasicQoS',Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
         [parameter(ParameterSetName = 'NoQueueName',Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
         [parameter(ParameterSetName = 'QueueName',Mandatory = $false, ValueFromPipelineByPropertyName = $true)]
@@ -67,7 +75,11 @@
         [parameter(ParameterSetName = 'QueueName',ValueFromPipelineByPropertyName = $true)]
         [parameter(parameterSetName = 'QueueNameWithBasicQoS',ValueFromPipelineByPropertyName = $true)]
         [bool]$AutoDelete = $False,
-        
+
+        [parameter(ParameterSetName = 'QueueName',ValueFromPipelineByPropertyName = $true)]
+        [parameter(parameterSetName = 'QueueNameWithBasicQoS',ValueFromPipelineByPropertyName = $true)]
+        [System.Collections.Generic.Dictionary[String, Object]]$Arguments = $null,
+
         [parameter(parameterSetName = 'QueueNameWithBasicQoS',Mandatory = $true,ValueFromPipelineByPropertyName = $true)]
         [parameter(ParameterSetName = 'NoQueueNameWithBasicQoS',Mandatory = $true,ValueFromPipelineByPropertyName = $true)]
         [uint32]$prefetchSize,
@@ -84,10 +96,17 @@
     {
         $Channel = $Connection.CreateModel()
 
+        Write-Progress -id 10 -Activity 'Create SCMB Connection' -Status 'Attempting connection to channel' -PercentComplete 80
+
+        #Actively declare the Exchange (as non-autodelete, non-durable)
+        if($ExchangeType -and ![string]::IsNullOrEmpty($Exchange)) {
+            $ExchangeResult = $Channel.ExchangeDeclare($Exchange,$ExchangeType.ToLower())
+        }
+
         #Create a personal queue or bind to an existing queue
         if($QueueName)
         {
-            $QueueResult = $Channel.QueueDeclare($QueueName, $Durable, $Exclusive, $AutoDelete, $null)
+            $QueueResult = $Channel.QueueDeclare($QueueName, $Durable, $Exclusive, $AutoDelete, $Arguments)
             if(-not $Key)
             {
                 $Key = $QueueName
@@ -104,6 +123,9 @@
         foreach ($keyItem in $key) {
             $Channel.QueueBind($QueueName, $Exchange, $KeyItem)
         }
+
+        Write-Progress -id 10 -Activity 'Create SCMB Connection' -Status ('Conneccted to channel: {0}, {1}, {2}' -f $QueueName, $Exchange, $KeyItem) -PercentComplete 90
+
         $Channel
     }
     Catch

@@ -14,6 +14,10 @@
     .PARAMETER Exchange
         RabbitMq Exchange
 
+    .PARAMETER ExchangeType
+        Specify the Exchange Type to be Explicitly declared as non-durable, non-autodelete, without any option.
+        Should you want more specific Exchange, create it prior connecting to the channel, and do not specify this parameter.
+        
     .PARAMETER Key
         Routing Key to look for
 
@@ -44,13 +48,22 @@
     .PARAMETER Credential
         Optional PSCredential to connect to RabbitMq with
 
+    .PARAMETER CertPath
+        Pkcs12/PFX formatted certificate to connect to RabbitMq with.  Prior to connecting, please make sure the system trusts the CA issuer or self-signed SCMB certifiate.
+
+    .PARAMETER CertPassphrase
+        The SecureString Pkcs12/PFX Passphrase of the certificate.
+
     .PARAMETER Ssl
         Optional Ssl version to connect to RabbitMq with
 
         If specified, we use ComputerName as the SslOption ServerName property.
 
+    .PARAMETER vhost
+        Create a connection via the specified virtual host, default is /
+
     .PARAMETER IncludeEnvelope
-        Include the Message envelope (Metadata) of the message. If ommited, only 
+        Include the Message envelope (Metadata) of the message. If ommited, only
         the payload (body of the message) is returned
 
     .EXAMPLE
@@ -64,11 +77,17 @@
 
         [parameter(Mandatory = $True)]
         [string]$Exchange,
+        
+        [parameter(Mandatory = $false)]
+        [ValidateSet('Direct','Fanout','Topic','Headers')]
+        [string]$ExchangeType = $null,
 
+        [Alias('routing_key')]
         [parameter(ParameterSetName = 'NoQueueName',Mandatory = $true)]
         [parameter(ParameterSetName = 'QueueName',Mandatory = $false)]
         [string]$Key,
 
+        [Alias('Queue')]
         [parameter(ParameterSetName = 'QueueName',
                    Mandatory = $True)]
         [string]$QueueName,
@@ -82,15 +101,26 @@
         [parameter(ParameterSetName = 'QueueName')]
         [bool]$AutoDelete = $False,
 
+        [parameter(ParameterSetName = 'QueueName')]
+        [System.Collections.Generic.Dictionary[String, Object]]$Arguments = $null,
+
         [switch]$RequireAck,
 
         [int]$LoopInterval = 1,
+
+        [double]$LoopIntervalMilliseconds = 0,
 
         [PSCredential]
         [System.Management.Automation.Credential()]
         $Credential,
 
+        [string]$CertPath,
+
+        [securestring]$CertPassphrase,
+
         [System.Security.Authentication.SslProtocols]$Ssl,
+
+        [string]$vhost = '/',
 
         [switch]$IncludeEnvelope
     )
@@ -101,22 +131,31 @@
         $ChanParams = @{ Exchange = $Exchange }
         Switch($PSBoundParameters.Keys)
         {
-            'Ssl'        { $ConnParams.Add('Ssl',$Ssl) }
-            'Credential' { $ConnParams.Add('Credential',$Credential) }
-            'Key'        { $ChanParams.Add('Key',$Key)}
+            'Ssl'            { $ConnParams.Add('Ssl',$Ssl) }
+            'CertPath'       { $ConnParams.Add('CertPath',$CertPath)}
+            'CertPassphrase' { $ConnParams.Add('CertPassphrase',$CertPassphrase)}
+            'Credential'     { $ConnParams.Add('Credential',$Credential) }
+            'vhost'          { $ConnParams.Add('vhost',$vhost) }
+            'Key'            { $ChanParams.Add('Key',$Key)}
+            'ExchangeType'   { $ChanParams.Add('ExchangeType',$ExchangeType)}
             'QueueName'
             {
-                $ChanParams.Add('QueueName',$QueueName)
-                $ChanParams.Add('Durable' ,$Durable)
-                $ChanParams.Add('Exclusive',$Exclusive)
-                $ChanParams.Add('AutoDelete' ,$AutoDelete)
+                $ChanParams.Add('QueueName', $QueueName)
+                $ChanParams.Add('Durable', $Durable)
+                $ChanParams.Add('Exclusive', $Exclusive)
+                $ChanParams.Add('AutoDelete', $AutoDelete)
+                $ChanParams.Add('Arguments', $Arguments)
             }
         }
 
+        Write-Progress -id 10 -Activity 'Create SCMB Connection' -Status 'Building connection' -PercentComplete 0
+
         #Create the connection and channel
         $Connection = New-RabbitMqConnectionFactory @ConnParams
-        $Channel = Connect-RabbitMqChannel @ChanParams -Connection $Connection
+        Write-Progress -id 10 -Activity 'Create SCMB Connection' -Status 'Connection Established' -PercentComplete 75
 
+        $Channel = Connect-RabbitMqChannel @ChanParams -Connection $Connection
+        Write-Progress -id 10 -Activity 'Create SCMB Connection' -Status 'Connected' -Completed
 
         #Create our consumer
         $Consumer = New-Object RabbitMQ.Client.QueueingBasicConsumer($Channel)
@@ -125,7 +164,8 @@
         $Delivery = New-Object RabbitMQ.Client.Events.BasicDeliverEventArgs
 
         #Listen on an infinite loop but still use timeouts so Ctrl+C will work!
-        $Timeout = New-TimeSpan -Seconds $LoopInterval
+        $Timeout = (New-TimeSpan -Seconds $LoopInterval) + ([timeSpan]::FromMilliseconds($LoopIntervalMilliseconds))
+
         while($true)
         {
             if($Consumer.Queue.Dequeue($Timeout.TotalMilliseconds, [ref]$Delivery))

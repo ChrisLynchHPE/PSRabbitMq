@@ -9,30 +9,27 @@
     .PARAMETER Source
         Config source:
         RabbitMqConfig to view module variable
-        PSRabbitMq.xml to view PSRabbitMq.xml
+        PSRabbitMq.xml to view PSRabbitMq.xml from "$env:APPDATA\PSRabbitMq.xml"
+        CurrentUser to view PSRabbitMq.xml from "$env:APPDATA\PSRabbitMq.xml"
+        System to view PSRabbitMq.xml from "$env:PROGRAMDATA\PSRabbitMq.xml"
 
     .FUNCTIONALITY
         RabbitMq
     #>
     [cmdletbinding()]
     param(
-        [ValidateSet('RabbitMqConfig','PSRabbitMq.xml')]
+        [ValidateSet('RabbitMqConfig','PSRabbitMq.xml','CurrentUser','System')]
         [string]$Source = "RabbitMqConfig"
     )
-
-    #handle PS2
-    if(-not $PSScriptRoot)
-    {
-        $PSScriptRoot = Split-Path $MyInvocation.MyCommand.Path -Parent
-    }
-
-    if($Source -eq "RabbitMqConfig")
-    {
+    
+    if($Source -eq "RabbitMqConfig"){
         $Script:RabbitMqConfig
     }
-    else
-    {
-        Import-Clixml -Path "$PSScriptRoot\PSRabbitMq.xml"
+    elseif($Source -eq "PSRabbitMq.xml" -or $Source -eq "CurrentUser"){
+        Import-Clixml -Path "$env:APPDATA\PSRabbitMq.xml"
+    }
+    elseif($Source -eq "System"){
+        Import-Clixml -Path "$env:PROGRAMDATA\PSRabbitMq.xml"
     }
 
 }
